@@ -5,7 +5,7 @@ Usage: python agent.py [--top 3]   (reads data/listings.json, runs filters, prin
 import argparse
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 
@@ -120,16 +120,23 @@ LISTING:
     return _chat_json(prompt, Analysis)
 
 
-def rank(listings, profile=DEFAULT_PROFILE, workers=3):
-    """Analyse listings in parallel; return them with `analysis` attached, best first."""
+def rank(listings, profile=DEFAULT_PROFILE, workers=3, on_progress=None):
+    """Analyse listings in parallel; return them with `analysis` attached, best first.
+
+    on_progress(done, total) is called from the calling thread (safe for Streamlit).
+    """
     def one(x):
         try:
             return dict(x, analysis=analyse(x, profile).model_dump(), error=None)
         except Exception as e:
             return dict(x, analysis=None, error=str(e)[:200])
 
+    out = []
     with ThreadPoolExecutor(workers) as ex:
-        out = list(ex.map(one, listings))
+        for f in as_completed([ex.submit(one, x) for x in listings]):
+            out.append(f.result())
+            if on_progress:
+                on_progress(len(out), len(listings))
     # Best score first; ties broken by distance to the target.
     out.sort(key=lambda x: (-(x["analysis"]["score"] if x["analysis"] else -1), x.get("distance_km") or 1e9))
     return out
