@@ -1,0 +1,46 @@
+# OS
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+out/
+coverage/
+.turbo/
+*.tsbuildinfo
+
+# Data / models
+*.sqlite
+*.db
+data/raw/
+checkpoints/
