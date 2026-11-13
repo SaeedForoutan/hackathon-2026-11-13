@@ -211,3 +211,7 @@ else:
     st.markdown(f"**{len(results)} flats ranked for {profile['name']}** · {n_new} new · run at {st.session_state['run_at']}")
     for i, x in enumerate(results, 1):
         render_card(i, x, profile)
+
+st.divider()
+st.caption("Built by **Saeed Foroutan** · AI Tinkerers Prague hackathon, 13 Nov 2026 · "
+           "Data: Apify · AI: Featherless")
