@@ -44,3 +44,6 @@ coverage/
 *.db
 data/raw/
 checkpoints/
+
+# Scraped listings (contain landlords' personal contact details)
+data/
