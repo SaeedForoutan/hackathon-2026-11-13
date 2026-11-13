@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import streamlit as st
 
-from agent import DEFAULT_PROFILE, draft_message, rank
+from agent import DEFAULT_MODEL, DEFAULT_PROFILE, MODEL_CHOICES, draft_message, rank
 from filter import apply_filters, load_listings, normalize
 from scrape import scrape
 
@@ -39,7 +39,7 @@ def save_seen(seen):
 
 # ---------- pipeline ----------
 
-def run_pipeline(profile, max_price, min_area, max_km, max_items, use_saved, only_new):
+def run_pipeline(profile, model, max_price, min_area, max_km, max_items, use_saved, only_new):
     with st.status("Hunting for flats…", expanded=True) as status:
         if use_saved:
             st.write("📂 Using saved listings (no Apify call)")
@@ -70,27 +70,27 @@ def run_pipeline(profile, max_price, min_area, max_km, max_items, use_saved, onl
             return []
 
         bar = st.progress(0.0, text="🧠 Reading the Czech ads…")
-        ranked = rank(kept, profile,
+        ranked = rank(kept, profile, model=model,
                       on_progress=lambda d, n: bar.progress(d / n, text=f"🧠 Reading the Czech ads… {d}/{n}"))
 
         top = [x for x in ranked if x["analysis"]][:AUTO_DRAFT_TOP]
         st.write(f"✉️ Drafting Czech messages for the top {len(top)}…")
         with ThreadPoolExecutor(3) as ex:
-            for x, m in zip(top, ex.map(lambda x: _safe_draft(x, profile), top)):
+            for x, m in zip(top, ex.map(lambda x: _safe_draft(x, profile, model), top)):
                 x["message"] = m
 
         now = datetime.now().isoformat(timespec="seconds")
         for x in kept:
             seen.setdefault(x["id"], now)
         save_seen(seen)
-        LAST_RUN.write_text(json.dumps({"profile": profile, "at": now, "results": ranked}, ensure_ascii=False))
+        LAST_RUN.write_text(json.dumps({"profile": profile, "model": model, "at": now, "results": ranked}, ensure_ascii=False))
         status.update(label=f"Done: {len(ranked)} flats ranked", state="complete", expanded=False)
     return ranked
 
 
-def _safe_draft(x, profile):
+def _safe_draft(x, profile, model):
     try:
-        return draft_message(x, profile).model_dump()
+        return draft_message(x, profile, model).model_dump()
     except Exception as e:
         return {"error": str(e)[:200]}
 
@@ -105,12 +105,12 @@ def fmt_czk(n):
     return f"{n:,} Kč".replace(",", " ") if n else "?"
 
 
-def render_message(x, profile, key):
+def render_message(x, profile, model, key):
     m = x.get("message")
     if m is None:
         if st.button("✉️ Draft message in Czech", key=f"draft-{key}"):
             with st.spinner("Writing in Czech…"):
-                x["message"] = m = _safe_draft(x, profile)
+                x["message"] = m = _safe_draft(x, profile, model)
         else:
             return
     if "error" in m:
@@ -125,7 +125,7 @@ def render_message(x, profile, key):
         st.link_button("Open in email", mailto)
 
 
-def render_card(i, x, profile):
+def render_card(i, x, profile, model):
     an = x["analysis"]
     with st.container(border=True):
         left, right = st.columns([1, 2.3], gap="medium")
@@ -159,7 +159,7 @@ def render_card(i, x, profile):
             c.markdown("**👎 Cons**\n" + "\n".join(f"- {s}" for s in an["cons"]))
             if an["red_flags"]:
                 st.error("**🚩 Red flags**\n" + "\n".join(f"- {s}" for s in an["red_flags"]))
-            render_message(x, profile, key=x["id"])
+            render_message(x, profile, model, key=x["id"])
 
 
 with st.sidebar:
@@ -174,6 +174,12 @@ with st.sidebar:
     min_area = st.number_input("Min size (m²)", 0, 200, 25, step=5)
     max_km = st.slider("Max distance (km)", 1.0, 20.0, 10.0, step=0.5)
     max_items = st.slider("Listings to pull from Sreality", 5, 60, 20, step=5)
+
+    st.header("🧠 AI model")
+    model = st.selectbox("Model (on Featherless)", list(MODEL_CHOICES), format_func=MODEL_CHOICES.get,
+                         index=list(MODEL_CHOICES).index(DEFAULT_MODEL) if DEFAULT_MODEL in MODEL_CHOICES else 0,
+                         help="Reads the Czech ads and writes the landlord message. "
+                              "If it fails, the app falls back to DeepSeek V3.2.")
     only_new = st.checkbox("Only show new since last run", value=False)
     use_saved = st.checkbox("Offline: re-use last scraped listings", value=False,
                             help="Skips Apify; still runs the AI on data/listings.json")
@@ -183,7 +189,8 @@ with st.sidebar:
     st.divider()
     if LAST_RUN.exists() and st.button("⏪ Show last saved run (no network)", width="stretch"):
         saved = json.loads(LAST_RUN.read_text())
-        st.session_state.update(results=saved["results"], profile=saved["profile"], run_at=saved["at"])
+        st.session_state.update(results=saved["results"], profile=saved["profile"], run_at=saved["at"],
+                                run_model=saved.get("model"))
     if st.button("Forget seen listings", width="stretch"):
         SEEN.unlink(missing_ok=True)
         st.toast("Seen history cleared: every listing counts as new again")
@@ -195,8 +202,9 @@ st.caption("Today's Prague rentals from Sreality, read for you in plain English,
 if go:
     profile = {"name": name, "about": about, "target": target, "notes": notes}
     try:
-        results = run_pipeline(profile, max_price, min_area, max_km, max_items, use_saved, only_new)
-        st.session_state.update(results=results, profile=profile, run_at=datetime.now().isoformat(timespec="seconds"))
+        results = run_pipeline(profile, model, max_price, min_area, max_km, max_items, use_saved, only_new)
+        st.session_state.update(results=results, profile=profile, run_model=model,
+                                run_at=datetime.now().isoformat(timespec="seconds"))
     except Exception as e:
         st.error(f"Something failed: {e}. Try **Show last saved run** in the sidebar.")
 
@@ -208,9 +216,11 @@ elif not results:
 else:
     profile = st.session_state["profile"]
     n_new = sum(bool(x.get("is_new")) for x in results)
-    st.markdown(f"**{len(results)} flats ranked for {profile['name']}** · {n_new} new · run at {st.session_state['run_at']}")
+    run_model = st.session_state.get("run_model")
+    by = f" · by {MODEL_CHOICES.get(run_model, run_model).split(' (')[0]}" if run_model else ""
+    st.markdown(f"**{len(results)} flats ranked for {profile['name']}** · {n_new} new{by} · run at {st.session_state['run_at']}")
     for i, x in enumerate(results, 1):
-        render_card(i, x, profile)
+        render_card(i, x, profile, model)
 
 st.divider()
 st.caption("Built by **Saeed Foroutan** · AI Tinkerers Prague hackathon, 13 Nov 2026 · "
